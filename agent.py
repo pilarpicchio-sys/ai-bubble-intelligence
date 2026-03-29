@@ -2,6 +2,7 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import requests
+import os
 
 # ================================
 # FILES
@@ -12,13 +13,17 @@ STATE_FILE = Path("regime_state.txt")
 EVENT_LOG = Path("events.log")
 
 # ================================
-# TELEGRAM CONFIG
+# TELEGRAM (SAFE - ENV VARS)
 # ================================
 
-TOKEN = "8014181321:AAFFwhOYgOGhCiho4X16YPy8Hk5UzsTf9M8"
-CHAT_ID = "7688549575"
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram(msg):
+    if not TOKEN or not CHAT_ID:
+        print("⚠️ Telegram not configured")
+        return
+
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
@@ -26,7 +31,7 @@ def send_telegram(msg):
         print("Telegram error:", e)
 
 # ================================
-# MODEL (placeholder)
+# MODEL
 # ================================
 
 def compute_scores():
@@ -53,7 +58,7 @@ def load_last_regime():
         return None
 
     content = STATE_FILE.read_text().strip()
-    content = content.split("|")[0]  # fix robusto
+    content = content.split("|")[0]
 
     return content
 
@@ -97,19 +102,17 @@ def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
     if prev_regime is None:
         return "INIT"
 
-    # regime change
     if prev_regime != new_regime:
         return f"REGIME CHANGE: {prev_regime} -> {new_regime}"
 
-    # spike
     if prev_bubble is not None:
         delta = new_bubble - prev_bubble
 
         if delta > 0.5:
-            return "RISK SPIKE ↑"
+            return "RISK SPIKE UP"
 
         if delta < -0.5:
-            return "RISK DROP ↓"
+            return "RISK DROP DOWN"
 
     return None
 
@@ -118,7 +121,7 @@ def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
 # ================================
 
 def log_event(event, date):
-    with open(EVENT_LOG, "a") as f:
+    with open(EVENT_LOG, "a", encoding="utf-8") as f:
         f.write(f"{date} | {event}\n")
 
 # ================================
@@ -139,13 +142,10 @@ def main():
     if last_row is not None:
         prev_bubble = last_row["bubble_score"]
 
-    # debug
     print("DEBUG prev_regime:", prev_regime)
 
-    # detect event
     event = detect_event(prev_regime, regime, prev_bubble, bubble)
 
-    # write data
     append_csv(date, bubble, hype, regime)
     save_last_regime(regime)
 
@@ -156,12 +156,11 @@ def main():
         "regime": regime
     })
 
-    # trigger alert
     if event:
         print(f"\n🚨 EVENT: {event}")
         log_event(event, date)
 
-        msg = f"""🚨 AI Bubble Alert
+        msg = f"""AI Bubble Alert
 
 Event: {event}
 Regime: {regime}
