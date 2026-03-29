@@ -139,7 +139,7 @@ def should_send_alert(event, regime, bubble, prev_bubble):
     return False
 
 # ================================
-# AI ARTICLE
+# AI ARTICLE (PRO)
 # ================================
 
 def generate_ai_text(regime, bubble, hype, event):
@@ -152,9 +152,7 @@ def generate_ai_text(regime, bubble, hype, event):
         client = OpenAI()
 
         prompt = f"""
-You are a financial analyst.
-
-Write a short professional market update (100-150 words).
+You are a financial journalist writing a short market report.
 
 Data:
 Regime: {regime}
@@ -162,11 +160,31 @@ Bubble Score: {bubble}
 Hype Score: {hype}
 Event: {event}
 
+Write:
+
+1. A strong headline
+2. A structured report with:
+
+Overview:
+Market Signals:
+Risk Outlook:
+
 Style:
-- Clear
-- Professional
-- Explain implications
+- Professional (Bloomberg / FT style)
+- Clear and concise
+- 120–180 words
 - No bullet points
+
+Format:
+
+TITLE: ...
+---
+Overview:
+...
+Market Signals:
+...
+Risk Outlook:
+...
 """
 
         response = client.chat.completions.create(
