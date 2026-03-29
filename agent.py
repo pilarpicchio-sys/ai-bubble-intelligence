@@ -33,18 +33,95 @@ def get_env(key):
 
 ZAPIER_WEBHOOK = get_env("ZAPIER_WEBHOOK")
 OPENAI_API_KEY = get_env("OPENAI_API_KEY")
+FRED_API_KEY = get_env("FRED_API_KEY")
+
+# ================================
+# FRED DATA
+# ================================
+
+def get_fred_series(series_id):
+    url = f"https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series_id,
+        "api_key": FRED_API_KEY,
+        "file_type": "json",
+        "sort_order": "desc",
+        "limit": 1
+    }
+    r = requests.get(url, params=params)
+    data = r.json()
+    return float(data["observations"][0]["value"])
+
+# ================================
+# MACRO INDICATORS
+# ================================
+
+def get_macro_data():
+    try:
+        m2 = get_fred_series("M2SL")              # liquidità
+        vix = get_fred_series("VIXCLS")           # volatilità
+        rate = get_fred_series("FEDFUNDS")        # tassi
+
+        return {
+            "m2": m2,
+            "vix": vix,
+            "rate": rate
+        }
+    except Exception as e:
+        print("FRED error:", e)
+        return None
+
+# ================================
+# SCORE MACRO
+# ================================
+
+def compute_macro_score(data):
+
+    if data is None:
+        return 2.5
+
+    score = 0
+
+    # liquidità alta → rischio bolla
+    if data["m2"] > 20000:
+        score += 2
+
+    # volatilità bassa → euforia
+    if data["vix"] < 15:
+        score += 2
+
+    # tassi bassi → fuel
+    if data["rate"] < 2:
+        score += 1
+
+    return min(score, 6)
+
+# ================================
+# REGIME
+# ================================
+
+def classify_regime(score):
+
+    if score < 2:
+        return "LOW RISK"
+    elif score < 3.5:
+        return "CAUTION"
+    elif score < 5:
+        return "HIGH RISK"
+    else:
+        return "BUBBLE"
 
 # ================================
 # HISTORY
 # ================================
 
-def append_csv(date, bubble, hype, regime):
+def append_csv(date, score, regime):
     if not CSV_FILE.exists():
         with open(CSV_FILE, "w") as f:
-            f.write("date;bubble_score;hype_score;regime\n")
+            f.write("date;score;regime\n")
 
     with open(CSV_FILE, "a") as f:
-        f.write(f"{date};{bubble};{hype};{regime}\n")
+        f.write(f"{date};{score};{regime}\n")
 
 def load_history():
     if not CSV_FILE.exists():
@@ -52,152 +129,93 @@ def load_history():
     return pd.read_csv(CSV_FILE, sep=";")
 
 # ================================
-# BUBBLE MODEL
+# TREND + PERSISTENCE
 # ================================
 
-def compute_bubble_score(df):
+def compute_trend(df):
+    if df is None or len(df) < 3:
+        return "insufficient"
 
-    if df is None or len(df) < 5:
-        return 2.5
+    vals = df.tail(3)["score"].astype(float).values
 
-    recent = df.tail(5)["bubble_score"].astype(float)
+    if vals[2] > vals[1] > vals[0]:
+        return "uptrend"
+    elif vals[2] < vals[1] < vals[0]:
+        return "downtrend"
+    return "sideways"
 
-    momentum = recent.iloc[-1] - recent.iloc[0]
-    accel = recent.iloc[-1] - recent.iloc[-2]
+def compute_persistence(df):
+    if df is None:
+        return 0
 
-    score = 2.5 + momentum * 0.8 + accel * 1.2
-    score = max(0, min(6, score))
+    count = 0
+    for val in reversed(df["score"].astype(float).values):
+        if val >= 3.5:
+            count += 1
+        else:
+            break
 
-    return round(score, 2)
-
-# ================================
-# MODEL
-# ================================
-
-def compute_scores():
-
-    df = load_history()
-
-    bubble = compute_bubble_score(df)
-    hype = 0.4
-
-    if bubble < 2:
-        regime = "LOW RISK"
-    elif bubble < 3.5:
-        regime = "CAUTION"
-    elif bubble < 5:
-        regime = "HIGH RISK"
-    else:
-        regime = "BUBBLE"
-
-    return bubble, hype, regime
-
-# ================================
-# EVENT DETECTION
-# ================================
-
-def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
-
-    if prev_regime is None:
-        return "INIT"
-
-    if prev_regime != new_regime:
-        return f"REGIME CHANGE: {prev_regime} -> {new_regime}"
-
-    if prev_bubble is not None:
-        delta = float(new_bubble) - float(prev_bubble)
-
-        if delta > 0.5:
-            return "RISK SPIKE UP"
-
-        if delta < -0.5:
-            return "RISK DROP DOWN"
-
-    return None
+    return count
 
 # ================================
 # ALERT LOGIC
 # ================================
 
-def should_send_alert(event, regime, bubble, prev_bubble):
+def should_send_alert(regime, trend, persistence, score):
 
-    if event is None:
-        return False
+    if regime == "BUBBLE":
+        return True
 
-    if "REGIME CHANGE" in event:
-        if "HIGH RISK" in event or "BUBBLE" in event:
-            return True
+    if persistence >= 3 and regime == "HIGH RISK":
+        return True
 
-    if prev_bubble is not None:
-        delta = bubble - prev_bubble
-        if delta > 0.8:
-            return True
-
-    if bubble >= 5:
+    if trend == "uptrend" and score > 4:
         return True
 
     return False
 
 # ================================
-# AI ARTICLE (PRO)
+# AI ANALYSIS
 # ================================
 
-def generate_ai_text(regime, bubble, hype, event):
+def generate_ai_text(regime, score, macro, trend, persistence):
 
     if not OPENAI_API_KEY:
-        return "AI analysis unavailable"
+        return "AI unavailable"
 
-    try:
-        from openai import OpenAI
-        client = OpenAI()
+    from openai import OpenAI
+    client = OpenAI()
 
-        prompt = f"""
-You are a financial journalist writing a short market report.
+    prompt = f"""
+You are a macro analyst.
 
 Data:
 Regime: {regime}
-Bubble Score: {bubble}
-Hype Score: {hype}
-Event: {event}
+Score: {score}
+Trend: {trend}
+Persistence: {persistence}
+M2: {macro['m2']}
+VIX: {macro['vix']}
+Rates: {macro['rate']}
 
-Write:
-
-1. A strong headline
-2. A structured report with:
-
-Overview:
-Market Signals:
-Risk Outlook:
-
-Style:
-- Professional (Bloomberg / FT style)
-- Clear and concise
-- 120–180 words
-- No bullet points
-
-Format:
+Write a professional report:
 
 TITLE: ...
 ---
 Overview:
 ...
-Market Signals:
+Market Dynamics:
 ...
 Risk Outlook:
 ...
 """
 
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
-        )
+    res = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
 
-        return response.choices[0].message.content.strip()
-
-    except Exception as e:
-        print("AI error:", e)
-        return "AI analysis unavailable"
+    return res.choices[0].message.content.strip()
 
 # ================================
 # WEBHOOK
@@ -205,26 +223,11 @@ Risk Outlook:
 
 def send_webhook(payload):
     if not ZAPIER_WEBHOOK:
-        print("Webhook not configured")
+        print("No webhook")
         return
 
-    try:
-        r = requests.post(ZAPIER_WEBHOOK, json=payload, timeout=10)
-        print("Webhook status:", r.status_code)
-    except Exception as e:
-        print("Webhook error:", e)
-
-# ================================
-# STATE
-# ================================
-
-def load_last_regime():
-    if not STATE_FILE.exists():
-        return None
-    return STATE_FILE.read_text().strip()
-
-def save_last_regime(regime):
-    STATE_FILE.write_text(regime)
+    r = requests.post(ZAPIER_WEBHOOK, json=payload)
+    print("Webhook:", r.status_code)
 
 # ================================
 # MAIN
@@ -232,56 +235,48 @@ def save_last_regime(regime):
 
 def main():
 
-    print("\n=== AI BUBBLE AGENT PRO ===\n")
+    print("\n=== AI MACRO BUBBLE AGENT ===\n")
 
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    bubble, hype, regime = compute_scores()
+    macro = get_macro_data()
+    score = compute_macro_score(macro)
+    regime = classify_regime(score)
 
     df = load_history()
 
-    prev_regime = load_last_regime()
-    prev_bubble = None
+    trend = compute_trend(df)
+    persistence = compute_persistence(df)
 
-    if df is not None and not df.empty:
-        prev_bubble = float(df.iloc[-1]["bubble_score"])
-
-    event = detect_event(prev_regime, regime, prev_bubble, bubble)
-
-    append_csv(date, bubble, hype, regime)
-    save_last_regime(regime)
+    append_csv(date, score, regime)
 
     print({
         "regime": regime,
-        "bubble": bubble,
-        "hype": hype
+        "score": score,
+        "trend": trend,
+        "persistence": persistence
     })
 
-    if should_send_alert(event, regime, bubble, prev_bubble):
+    if should_send_alert(regime, trend, persistence, score):
 
-        print("🚨 EVENT:", event)
-
-        analysis = generate_ai_text(regime, bubble, hype, event)
+        analysis = generate_ai_text(regime, score, macro, trend, persistence)
 
         payload = {
             "date": date,
             "regime": regime,
-            "bubble": bubble,
-            "hype": hype,
-            "event": event,
+            "score": score,
+            "trend": trend,
+            "persistence": persistence,
             "analysis": analysis
         }
 
         send_webhook(payload)
 
     else:
-        print("No significant event")
+        print("No alert")
 
     print("\n=== DONE ===")
 
-# ================================
-# RUN
-# ================================
 
 if __name__ == "__main__":
     main()
