@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-from datetime import datetime
 import plotly.graph_objects as go
 
 # ================================
@@ -11,7 +10,6 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 CSV_FILE = Path("bubble_risk_history.csv")
-STATE_FILE = Path("regime_state.txt")
 
 # ================================
 # LOAD DATA
@@ -38,44 +36,16 @@ def load_data():
         return None
 
 # ================================
-# SAFE REGIME LOADER (🔥 FIX)
-# ================================
-
-def load_regime_state():
-    if not STATE_FILE.exists():
-        return "N/A", None
-
-    try:
-        raw = STATE_FILE.read_text().strip()
-
-        parts = raw.split("|")
-
-        if len(parts) != 2:
-            return "N/A", None
-
-        regime = parts[0].strip()
-
-        try:
-            time = datetime.fromisoformat(parts[1].strip())
-        except:
-            time = None
-
-        return regime, time
-
-    except:
-        return "N/A", None
-
-# ================================
 # STYLE
 # ================================
 
-def regime_emoji(regime):
+def regime_style(regime):
     return {
-        "LOW RISK": "🟢",
-        "CAUTION": "🟡",
-        "HIGH RISK": "🔴",
-        "BUBBLE": "🚨"
-    }.get(regime, "⚪")
+        "LOW RISK": ("🟢", "#16a34a"),
+        "CAUTION": ("🟡", "#f59e0b"),
+        "HIGH RISK": ("🔴", "#dc2626"),
+        "BUBBLE": ("🚨", "#7c3aed")
+    }.get(regime, ("⚪", "#999"))
 
 # ================================
 # APP
@@ -93,27 +63,24 @@ if df is None or len(df) == 0:
 latest = df.iloc[-1]
 
 # ================================
-# REGIME
+# REGIME (FROM CSV 🔥)
 # ================================
 
-regime, last_change = load_regime_state()
-emoji = regime_emoji(regime)
+regime = latest.get("regime", "N/A")
+emoji, color = regime_style(regime)
 
 # ================================
 # HERO
 # ================================
 
-st.markdown("## 🧠 Regime Status")
+st.markdown("## 🧠 AI Regime")
 
-st.markdown(f"### {emoji} {regime}")
-
-col1, col2 = st.columns(2)
-
-col1.metric("Bubble Score", round(latest["bubble_score"], 2))
-col2.metric("Hype Score", round(latest["hype_score"], 2))
-
-if last_change:
-    st.caption(f"Last change: {last_change.strftime('%Y-%m-%d %H:%M')}")
+st.markdown(f"""
+<div style="padding:20px;border-radius:12px;background:{color}20;">
+<h2 style="color:{color};margin:0;">{emoji} {regime}</h2>
+<p style="margin:0;">Bubble Score: {round(latest["bubble_score"],2)} | Hype: {round(latest["hype_score"],2)}</p>
+</div>
+""", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -169,13 +136,20 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# DATA
+# REGIME TIMELINE (🔥 NUOVO)
 # ================================
 
-st.subheader("Recent Data")
+st.subheader("Regime Timeline")
 
-for _, row in df.tail(8).iterrows():
-    st.write(f"{row['date']} → Score: {row['bubble_score']}")
+timeline = df[["date", "regime"]].tail(10)
+
+for _, row in timeline.iterrows():
+    e, _ = regime_style(row["regime"])
+    st.write(f"{row['date']} → {e} {row['regime']}")
+
+# ================================
+# DATA
+# ================================
 
 with st.expander("Advanced data"):
     st.dataframe(df.tail(20), use_container_width=True)
