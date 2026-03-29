@@ -20,20 +20,16 @@ def load_data():
     if not CSV_FILE.exists():
         return None
 
-    try:
-        df = pd.read_csv(CSV_FILE, sep=";")
+    df = pd.read_csv(CSV_FILE, sep=";")
 
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df["bubble_score"] = pd.to_numeric(df["bubble_score"], errors="coerce")
-        df["hype_score"] = pd.to_numeric(df["hype_score"], errors="coerce")
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["bubble_score"] = pd.to_numeric(df["bubble_score"], errors="coerce")
+    df["hype_score"] = pd.to_numeric(df["hype_score"], errors="coerce")
 
-        df = df.dropna()
-        df = df.sort_values("date")
+    df = df.dropna()
+    df = df.sort_values("date")
 
-        return df
-
-    except:
-        return None
+    return df
 
 # ================================
 # STYLE
@@ -48,11 +44,63 @@ def regime_style(regime):
     }.get(regime, ("⚪", "#999"))
 
 # ================================
+# REGIME DURATION
+# ================================
+
+def regime_duration(df):
+    if "regime" not in df.columns or len(df) < 2:
+        return "N/A"
+
+    current = df.iloc[-1]["regime"]
+    count = 0
+
+    for r in reversed(df["regime"]):
+        if r == current:
+            count += 1
+        else:
+            break
+
+    return f"{count} periods"
+
+# ================================
+# ANALYST COMMENTARY (🔥 CORE)
+# ================================
+
+def generate_commentary(df):
+    if len(df) < 3:
+        return "Insufficient data."
+
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+
+    delta = last["bubble_score"] - prev["bubble_score"]
+    hype = last["hype_score"]
+
+    regime = last.get("regime", "N/A")
+
+    # STRUCTURED ANALYSIS
+    if regime == "LOW RISK":
+        return "Macro and narrative signals remain aligned. No evidence of speculative excess. Environment stable."
+
+    if regime == "CAUTION":
+        return "Early divergence between narrative intensity and macro stability. Monitoring phase. No structural stress yet."
+
+    if regime == "HIGH RISK":
+        if delta > 0:
+            return "Risk is building with increasing momentum. Narrative expansion not fully supported by macro conditions. Fragility rising."
+        else:
+            return "Elevated risk but stabilizing. No further acceleration. Monitoring for potential reversal."
+
+    if regime == "BUBBLE":
+        return "Late-stage dynamics. Narrative dominance over fundamentals. Conditions consistent with terminal phase behavior."
+
+    return "No clear regime identified."
+
+# ================================
 # APP
 # ================================
 
 st.title("AI Bubble Intelligence")
-st.caption("Detect structural shifts in AI-driven market risk")
 
 df = load_data()
 
@@ -62,58 +110,69 @@ if df is None or len(df) == 0:
 
 latest = df.iloc[-1]
 
-# ================================
-# REGIME SAFE (🔥 FIX)
-# ================================
-
-if "regime" in df.columns:
-    regime = latest.get("regime", "N/A")
-else:
-    regime = "N/A"
-
+regime = latest.get("regime", "N/A")
 emoji, color = regime_style(regime)
 
 # ================================
 # HERO
 # ================================
 
-st.markdown("## 🧠 AI Regime")
-
 st.markdown(f"""
-<div style="padding:20px;border-radius:12px;background:{color}20;">
-<h2 style="color:{color};margin:0;">{emoji} {regime}</h2>
-<p style="margin:0;">Bubble Score: {round(latest["bubble_score"],2)} | Hype: {round(latest["hype_score"],2)}</p>
+<div style="padding:30px;border-radius:15px;background:{color};color:white;text-align:center;">
+<h1 style="margin:0;">{emoji} {regime}</h1>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("---")
-
 # ================================
-# INTERPRETATION
+# KPI STRIP
 # ================================
 
-st.subheader("Interpretation")
+col1, col2, col3 = st.columns(3)
 
-if regime == "LOW RISK":
-    st.write("Market conditions are stable. No bubble dynamics detected.")
+col1.metric("Bubble Score", round(latest["bubble_score"], 2))
+col2.metric("Hype Score", round(latest["hype_score"], 2))
+col3.metric("Regime Duration", regime_duration(df))
 
-elif regime == "CAUTION":
-    st.write("Early imbalance signals. Narrative and macro are starting to diverge.")
+# ================================
+# ANALYST VIEW (🔥 DIFFERENZA VERA)
+# ================================
 
-elif regime == "HIGH RISK":
-    st.write("Elevated risk environment. Market fragility increasing.")
+st.subheader("Analyst Commentary")
 
-elif regime == "BUBBLE":
-    st.write("Late-stage bubble dynamics. High probability of correction.")
+st.write(generate_commentary(df))
 
-else:
-    st.write("Regime not available yet (older data).")
+# ================================
+# RISK DECOMPOSITION
+# ================================
+
+st.subheader("Risk Decomposition")
+
+col4, col5 = st.columns(2)
+
+col4.metric("Macro Proxy (Score)", round(latest["bubble_score"], 2))
+col5.metric("Narrative Pressure", round(latest["hype_score"], 2))
+
+# ================================
+# GAUGE
+# ================================
+
+fig_gauge = go.Figure(go.Indicator(
+    mode="gauge+number",
+    value=latest["bubble_score"],
+    gauge={
+        "axis": {"range": [0, 6]},
+        "bar": {"color": color},
+    }
+))
+
+fig_gauge.update_layout(height=250)
+st.plotly_chart(fig_gauge, use_container_width=True)
 
 # ================================
 # CHART
 # ================================
 
-st.subheader("Risk & Hype Dynamics")
+st.subheader("Dynamics")
 
 fig = go.Figure()
 
@@ -127,44 +186,28 @@ fig.add_trace(go.Scatter(
 fig.add_trace(go.Scatter(
     x=df["date"],
     y=df["hype_score"] * 5,
-    name="Hype (scaled)",
+    name="Hype",
     line=dict(dash="dot")
 ))
 
-fig.update_layout(
-    template="plotly_dark",
-    height=400,
-    margin=dict(l=20, r=20, t=20, b=20)
-)
-
+fig.update_layout(template="plotly_dark", height=400)
 st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# REGIME TIMELINE (🔥 FIXATA)
+# EVENT LOG
 # ================================
 
-st.subheader("Regime Timeline")
+st.subheader("Regime Log")
 
 if "regime" in df.columns:
+    recent = df.tail(8)
 
-    timeline = df[["date", "regime"]].tail(10)
-
-    for _, row in timeline.iterrows():
+    for _, row in recent.iterrows():
         e, _ = regime_style(row["regime"])
-        st.write(f"{row['date']} → {e} {row['regime']}")
-
-else:
-    st.info("Regime tracking started recently. No historical regime data yet.")
-
-# ================================
-# DATA
-# ================================
-
-with st.expander("Advanced data"):
-    st.dataframe(df.tail(20), use_container_width=True)
+        st.write(f"{e} {row['regime']} — {row['date']}")
 
 # ================================
 # FOOTER
 # ================================
 
-st.caption("System designed to detect regime shifts, not short-term noise.")
+st.caption("Designed for structural regime detection.")
