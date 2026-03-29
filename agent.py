@@ -1,7 +1,3 @@
-# ================================
-# AI BUBBLE AGENT PRO (CLEAN VERSION)
-# ================================
-
 import os
 from pathlib import Path
 from datetime import datetime
@@ -9,9 +5,7 @@ import pandas as pd
 import numpy as np
 from fredapi import Fred
 from dotenv import load_dotenv
-from send_email import send_email
 from news_analyzer import analyze_news
-from ai_report import generate_ai_report
 
 # ================================
 # CONFIG
@@ -20,40 +14,19 @@ from ai_report import generate_ai_report
 load_dotenv()
 
 FRED_API_KEY = os.getenv("FRED_API_KEY")
-EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
-
 fred = Fred(api_key=FRED_API_KEY)
 
 CSV_FILE = Path("bubble_risk_history.csv")
-
-# ================================
-# UTILS
-# ================================
-
-def safe_last(series):
-    s = series.dropna()
-    if len(s) == 0:
-        return None
-    return s.iloc[-1]
-
-def zscore(series):
-    s = series.dropna()
-    if len(s) < 10:
-        return 0
-    return (s.iloc[-1] - s.mean()) / (s.std() + 1e-6)
 
 # ================================
 # FRED DATA
 # ================================
 
 def collect_fred_data():
-
     series_ids = {
-        "productivity": "PRS85006091",
-        "unit_labor_cost": "PRS85006111",
-        "consumer_sentiment": "UMCSENT",
         "vix": "VIXCLS",
-        "high_yield_spread": "BAMLH0A0HYM2"
+        "spread": "BAMLH0A0HYM2",
+        "sentiment": "UMCSENT"
     }
 
     data = {}
@@ -67,72 +40,70 @@ def collect_fred_data():
     return data
 
 # ================================
-# HYPE MODEL
+# HELPERS
 # ================================
+
+def zscore(series):
+    s = series.dropna()
+    if len(s) < 10:
+        return 0
+    return (s.iloc[-1] - s.mean()) / (s.std() + 1e-6)
 
 def compute_hype(sentiment, volume):
-
-    hype = (
-        np.tanh(sentiment) * 0.6 +
-        np.log1p(volume) * 0.4
-    )
-
-    return round(hype, 3)
+    return round(np.tanh(sentiment)*0.6 + np.log1p(volume)*0.4, 3)
 
 # ================================
-# MACRO ENGINE
+# SCORE
 # ================================
 
-def evaluate_bubble_risk(fred_data, hype):
+def evaluate_score(data, hype):
 
     score = 0
 
-    score += max(0, zscore(fred_data["vix"])) * 1.5
-    score += max(0, zscore(fred_data["high_yield_spread"]))
-    score += max(0, -zscore(fred_data["consumer_sentiment"]))
-
-    try:
-        prod = safe_last(fred_data["productivity"])
-        labor = safe_last(fred_data["unit_labor_cost"])
-
-        if prod and labor and prod < labor:
-            score += 1
-    except:
-        pass
+    score += max(0, zscore(data["vix"])) * 1.5
+    score += max(0, zscore(data["spread"]))
+    score += max(0, -zscore(data["sentiment"]))
 
     score += np.tanh(hype) * 2
 
-    level = (
-        "Basso" if score < 2 else
-        "Medio" if score < 4 else
-        "Alto"
-    )
-
-    return round(score, 2), level
+    return round(score, 2)
 
 # ================================
-# SAVE CSV (ANTI-DUPLICATE)
+# REGIME
 # ================================
 
-def save_to_csv(data):
+def classify_regime(score):
+    if score < 2:
+        return "LOW RISK"
+    elif score < 3.5:
+        return "CAUTION"
+    elif score < 5:
+        return "HIGH RISK"
+    else:
+        return "BUBBLE"
+
+# ================================
+# SAVE CSV
+# ================================
+
+def save_to_csv(row):
 
     if CSV_FILE.exists():
         df = pd.read_csv(CSV_FILE, sep=";")
-
-        # evita duplicati stesso timestamp
-        if data["date"] in df["date"].values:
+        if row["date"] in df["date"].values:
             return
+
+    import csv
 
     write_header = not CSV_FILE.exists()
 
-    import csv
     with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=data.keys(), delimiter=';')
+        writer = csv.DictWriter(f, fieldnames=row.keys(), delimiter=";")
 
         if write_header:
             writer.writeheader()
 
-        writer.writerow(data)
+        writer.writerow(row)
 
 # ================================
 # MAIN
@@ -140,57 +111,30 @@ def save_to_csv(data):
 
 def main():
 
-    print("\n=== AI BUBBLE AGENT PRO ===\n")
+    print("\n=== AI BUBBLE AGENT (CSV REGIME) ===\n")
 
-    # FRED
-    fred_data = collect_fred_data()
+    data = collect_fred_data()
 
-    # NEWS
     headlines, sentiment, volume = analyze_news()
 
-    # HYPE
     hype = compute_hype(sentiment, volume)
+    score = evaluate_score(data, hype)
 
-    print("Hype:", hype)
+    regime = classify_regime(score)
 
-    # MACRO RISK
-    score, level = evaluate_bubble_risk(fred_data, hype)
-
-    print("Risk:", score, level)
-
-    # SAVE DATA (🔥 FIX TIMESTAMP)
-    data = {
+    row = {
         "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "bubble_score": score,
-        "risk_level": level,
-        "news_sentiment": sentiment,
-        "news_volume": volume,
-        "hype_score": hype
+        "hype_score": hype,
+        "regime": regime
     }
 
-    save_to_csv(data)
+    print(row)
 
-    # REPORT
-    report = generate_ai_report(
-        fred_data,
-        score,
-        level,
-        headlines,
-        sentiment
-    )
-
-    # EMAIL
-    send_email(
-        subject=f"AI Bubble Agent - {level}",
-        body=report,
-        to_email=EMAIL_ADDRESS
-    )
+    save_to_csv(row)
 
     print("\n=== DONE ===")
 
-# ================================
-# RUN
-# ================================
 
 if __name__ == "__main__":
     main()
