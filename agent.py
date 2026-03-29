@@ -17,12 +17,6 @@ except:
     pass
 
 # ================================
-# CONFIG
-# ================================
-
-DEBUG = True
-
-# ================================
 # PATHS
 # ================================
 
@@ -38,6 +32,7 @@ def get_env(key):
     return val.strip() if val else ""
 
 ZAPIER_WEBHOOK = get_env("ZAPIER_WEBHOOK")
+OPENAI_API_KEY = get_env("OPENAI_API_KEY")
 
 # ================================
 # HISTORY
@@ -121,7 +116,7 @@ def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
     return None
 
 # ================================
-# ALERT LOGIC (SMART)
+# ALERT LOGIC
 # ================================
 
 def should_send_alert(event, regime, bubble, prev_bubble):
@@ -129,22 +124,62 @@ def should_send_alert(event, regime, bubble, prev_bubble):
     if event is None:
         return False
 
-    # Regime change importante
     if "REGIME CHANGE" in event:
         if "HIGH RISK" in event or "BUBBLE" in event:
             return True
 
-    # Spike forte
     if prev_bubble is not None:
         delta = bubble - prev_bubble
         if delta > 0.8:
             return True
 
-    # Livello estremo
     if bubble >= 5:
         return True
 
     return False
+
+# ================================
+# AI ARTICLE
+# ================================
+
+def generate_ai_text(regime, bubble, hype, event):
+
+    if not OPENAI_API_KEY:
+        return "AI analysis unavailable"
+
+    try:
+        from openai import OpenAI
+        client = OpenAI()
+
+        prompt = f"""
+You are a financial analyst.
+
+Write a short professional market update (100-150 words).
+
+Data:
+Regime: {regime}
+Bubble Score: {bubble}
+Hype Score: {hype}
+Event: {event}
+
+Style:
+- Clear
+- Professional
+- Explain implications
+- No bullet points
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        print("AI error:", e)
+        return "AI analysis unavailable"
 
 # ================================
 # WEBHOOK
@@ -179,7 +214,7 @@ def save_last_regime(regime):
 
 def main():
 
-    print("\n=== AI BUBBLE AGENT ===\n")
+    print("\n=== AI BUBBLE AGENT PRO ===\n")
 
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -208,12 +243,15 @@ def main():
 
         print("🚨 EVENT:", event)
 
+        analysis = generate_ai_text(regime, bubble, hype, event)
+
         payload = {
             "date": date,
             "regime": regime,
             "bubble": bubble,
             "hype": hype,
-            "event": event
+            "event": event,
+            "analysis": analysis
         }
 
         send_webhook(payload)
