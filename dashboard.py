@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
+from datetime import datetime
 
 # ================================
 # CONFIG
@@ -12,6 +13,8 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 CSV_FILE = Path("bubble_risk_history.csv")
+STATE_FILE = Path("regime_state.txt")
+
 st_autorefresh(interval=10000, key="refresh")
 
 # ================================
@@ -35,51 +38,38 @@ def load_data():
     return df
 
 # ================================
-# CORE LOGIC
+# LOAD REGIME STATE
 # ================================
 
-def forecast_probability(df):
-    if len(df) < 10:
-        return None
+def load_regime_state():
+    if not STATE_FILE.exists():
+        return None, None
 
-    y = df["bubble_score"]
-    short = y.rolling(3).mean().iloc[-1]
-    long = y.rolling(10).mean().iloc[-1]
-    vol = y.rolling(10).std().iloc[-1]
+    content = STATE_FILE.read_text().split("|")
 
-    strength = (short - long) / (vol + 1e-6)
-    return 50 + np.tanh(strength) * 50
+    regime = content[0]
+    time = datetime.fromisoformat(content[1])
 
-def generate_signal(score, hype, prob):
-    if prob is None:
-        return "NEUTRAL"
+    return regime, time
 
-    composite = score * 0.5 + hype * 2 + (prob / 100) * 2
+# ================================
+# STYLE HELPERS
+# ================================
 
-    if composite > 6:
-        return "BUBBLE"
-    elif composite > 5:
-        return "HIGH RISK"
-    elif composite > 3.5:
-        return "CAUTION"
-    else:
-        return "LOW RISK"
-
-def detect_regime(score, hype):
-    if hype > 2 and score > 4:
-        return "LATE BUBBLE"
-    if score > 5:
-        return "UNWIND"
-    if hype > 2:
-        return "BUILDUP"
-    return "NORMAL"
+def regime_color(regime):
+    return {
+        "LOW RISK": "🟢",
+        "CAUTION": "🟡",
+        "HIGH RISK": "🔴",
+        "BUBBLE": "🚨"
+    }.get(regime, "⚪")
 
 # ================================
 # MAIN
 # ================================
 
 st.title("AI Bubble Intelligence")
-st.caption("Detect AI bubbles before they burst")
+st.caption("Detect structural shifts in AI-driven market risk")
 
 df = load_data()
 
@@ -89,62 +79,70 @@ if df is None or len(df) == 0:
 
 latest = df.iloc[-1]
 
-risk = latest["bubble_score"]
-hype = latest["hype_score"]
+# ================================
+# REGIME
+# ================================
 
-prob = forecast_probability(df)
-signal = generate_signal(risk, hype, prob)
-regime = detect_regime(risk, hype)
+current_regime, last_change = load_regime_state()
+
+emoji = regime_color(current_regime)
 
 # ================================
-# HERO
+# HERO (🔥 CORE UI)
 # ================================
+
+st.markdown("## 🧠 Regime Status")
 
 st.markdown(f"""
-### {signal}
-Regime: {regime} | Confidence: {int(prob) if prob else 'N/A'}%
+### {emoji} {current_regime or "N/A"}
 """)
 
-# 🔥 LAST UPDATE
-st.caption(f"Last update: {latest['date']}")
+col1, col2 = st.columns(2)
+
+col1.metric("Bubble Score", round(latest["bubble_score"], 2))
+col2.metric("Hype Score", round(latest["hype_score"], 2))
+
+if last_change:
+    st.caption(f"Last regime change: {last_change.strftime('%Y-%m-%d %H:%M')}")
+
+st.markdown("---")
 
 # ================================
-# TIMELINE
+# INTERPRETATION (🔥 PRODUCT)
 # ================================
 
-st.subheader("Recent Signal Changes")
+st.subheader("Interpretation")
 
-signals = []
+if current_regime == "LOW RISK":
+    st.write("Macro and narrative conditions remain stable. No significant bubble dynamics detected.")
 
-for i in range(10, len(df)):
-    sub = df.iloc[:i]
-    prob_i = forecast_probability(sub)
+elif current_regime == "CAUTION":
+    st.write("Early signs of imbalance are emerging. Narrative and macro conditions are starting to diverge.")
 
-    sig = generate_signal(
-        sub.iloc[-1]["bubble_score"],
-        sub.iloc[-1]["hype_score"],
-        prob_i
-    )
+elif current_regime == "HIGH RISK":
+    st.write("Risk conditions are elevated. Market structure shows increasing fragility and potential instability.")
 
-    signals.append((df.iloc[i]["date"], sig))
+elif current_regime == "BUBBLE":
+    st.write("Late-stage bubble dynamics detected. Risk of sharp correction is elevated.")
 
-for d, s in signals[-8:]:
-    st.write(f"{d.strftime('%Y-%m-%d %H:%M:%S')} → {s}")
+else:
+    st.write("Regime not available.")
 
 # ================================
-# CHART (🔥 FIX VISIVO)
+# CHART
 # ================================
+
+st.subheader("Risk & Hype Dynamics")
 
 fig = go.Figure()
 
-# Risk
 fig.add_trace(go.Scatter(
     x=df["date"],
     y=df["bubble_score"],
-    name="Risk"
+    name="Risk",
+    line=dict(width=3)
 ))
 
-# 🔥 Hype scalato per visibilità
 fig.add_trace(go.Scatter(
     x=df["date"],
     y=df["hype_score"] * 5,
@@ -155,14 +153,32 @@ fig.add_trace(go.Scatter(
 fig.update_layout(
     template="plotly_dark",
     height=400,
-    xaxis=dict(type="date")
+    xaxis=dict(type="date"),
+    margin=dict(l=20, r=20, t=20, b=20)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# DATA
+# TIMELINE (SIMPLE)
+# ================================
+
+st.subheader("Recent Data Points")
+
+recent = df.tail(8)
+
+for _, row in recent.iterrows():
+    st.write(f"{row['date'].strftime('%Y-%m-%d %H:%M:%S')} → Score: {row['bubble_score']}")
+
+# ================================
+# ADVANCED DATA
 # ================================
 
 with st.expander("Advanced data"):
     st.dataframe(df.tail(20), use_container_width=True)
+
+# ================================
+# FOOTER
+# ================================
+
+st.caption("This model reflects structural shifts, not intraday market noise.")
