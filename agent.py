@@ -5,7 +5,7 @@ import requests
 import os
 
 # ================================
-# LOAD ENV (SAFE)
+# LOAD ENV
 # ================================
 
 BASE_DIR = Path(__file__).parent
@@ -39,9 +39,6 @@ def get_env(key):
 
 ZAPIER_WEBHOOK = get_env("ZAPIER_WEBHOOK")
 
-if DEBUG:
-    print("Webhook configured:", bool(ZAPIER_WEBHOOK))
-
 # ================================
 # HISTORY
 # ================================
@@ -60,26 +57,20 @@ def load_history():
     return pd.read_csv(CSV_FILE, sep=";")
 
 # ================================
-# BUBBLE MODEL (CORE UPGRADE)
+# BUBBLE MODEL
 # ================================
 
 def compute_bubble_score(df):
 
     if df is None or len(df) < 5:
-        return 2.5  # neutro
+        return 2.5
 
     recent = df.tail(5)["bubble_score"].astype(float)
 
-    # momentum
     momentum = recent.iloc[-1] - recent.iloc[0]
-
-    # acceleration
     accel = recent.iloc[-1] - recent.iloc[-2]
 
-    # weighted score
     score = 2.5 + momentum * 0.8 + accel * 1.2
-
-    # clamp tra 0 e 6
     score = max(0, min(6, score))
 
     return round(score, 2)
@@ -93,8 +84,6 @@ def compute_scores():
     df = load_history()
 
     bubble = compute_bubble_score(df)
-
-    # hype base (lo miglioreremo dopo)
     hype = 0.4
 
     if bubble < 2:
@@ -132,17 +121,27 @@ def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
     return None
 
 # ================================
-# ALERT FILTER
+# ALERT LOGIC (SMART)
 # ================================
 
-def should_send_alert(event):
+def should_send_alert(event, regime, bubble, prev_bubble):
+
     if event is None:
         return False
 
+    # Regime change importante
     if "REGIME CHANGE" in event:
-        return True
+        if "HIGH RISK" in event or "BUBBLE" in event:
+            return True
 
-    if "SPIKE" in event:
+    # Spike forte
+    if prev_bubble is not None:
+        delta = bubble - prev_bubble
+        if delta > 0.8:
+            return True
+
+    # Livello estremo
+    if bubble >= 5:
         return True
 
     return False
@@ -192,7 +191,7 @@ def main():
     prev_bubble = None
 
     if df is not None and not df.empty:
-        prev_bubble = df.iloc[-1]["bubble_score"]
+        prev_bubble = float(df.iloc[-1]["bubble_score"])
 
     event = detect_event(prev_regime, regime, prev_bubble, bubble)
 
@@ -205,9 +204,9 @@ def main():
         "hype": hype
     })
 
-    if should_send_alert(event):
+    if should_send_alert(event, regime, bubble, prev_bubble):
 
-        print("EVENT:", event)
+        print("🚨 EVENT:", event)
 
         payload = {
             "date": date,
