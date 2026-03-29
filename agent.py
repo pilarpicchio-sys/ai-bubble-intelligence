@@ -5,6 +5,22 @@ import requests
 import os
 
 # ================================
+# LOAD ENV (SAFE)
+# ================================
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except:
+    pass  # dotenv opzionale (per GitHub/cloud)
+
+# ================================
+# CONFIG
+# ================================
+
+DEBUG = True
+
+# ================================
 # FILES
 # ================================
 
@@ -13,12 +29,15 @@ STATE_FILE = Path("regime_state.txt")
 EVENT_LOG = Path("events.log")
 
 # ================================
-# ENV VARIABLES (SAFE)
+# ENV VARIABLES (SAFE FALLBACK)
 # ================================
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ZAPIER_WEBHOOK = os.getenv("ZAPIER_WEBHOOK")
+ZAPIER_WEBHOOK = os.getenv("ZAPIER_WEBHOOK", "")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+if DEBUG:
+    print("DEBUG WEBHOOK SET:", bool(ZAPIER_WEBHOOK))
 
 # ================================
 # TELEGRAM
@@ -26,13 +45,17 @@ ZAPIER_WEBHOOK = os.getenv("ZAPIER_WEBHOOK")
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram not configured")
+        if DEBUG:
+            print("⚠️ Telegram not configured")
         return
 
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
-        print("📱 Telegram sent")
+        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
+
+        if DEBUG:
+            print("📱 Telegram status:", r.status_code)
+
     except Exception as e:
         print("Telegram error:", e)
 
@@ -42,20 +65,27 @@ def send_telegram(msg):
 
 def send_webhook(event, regime, bubble, hype, date):
     if not ZAPIER_WEBHOOK:
-        print("⚠️ Webhook not configured")
+        if DEBUG:
+            print("⚠️ Webhook not configured")
         return
 
-    data = {
+    payload = {
         "event": event,
         "regime": regime,
-        "bubble": bubble,
-        "hype": hype,
+        "bubble": float(bubble),
+        "hype": float(hype),
         "date": date
     }
 
     try:
-        requests.post(ZAPIER_WEBHOOK, json=data)
-        print("🌐 Webhook sent")
+        r = requests.post(ZAPIER_WEBHOOK, json=payload, timeout=10)
+
+        if DEBUG:
+            print("🌐 Webhook status:", r.status_code)
+
+        if r.status_code != 200:
+            print("⚠️ Webhook error response:", r.text)
+
     except Exception as e:
         print("Webhook error:", e)
 
@@ -64,7 +94,8 @@ def send_webhook(event, regime, bubble, hype, date):
 # ================================
 
 def compute_scores():
-    bubble_score = 4.0   # modifica per test
+    # 🔧 QUI collegherai il tuo vero modello
+    bubble_score = 5.5  # forzato per test Zapier
     hype_score = 0.439
 
     if bubble_score < 2:
@@ -126,7 +157,7 @@ def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
         return f"REGIME CHANGE: {prev_regime} -> {new_regime}"
 
     if prev_bubble is not None:
-        delta = new_bubble - prev_bubble
+        delta = float(new_bubble) - float(prev_bubble)
 
         if delta > 0.5:
             return "RISK SPIKE UP"
@@ -149,7 +180,7 @@ def log_event(event, date):
 # ================================
 
 def main():
-    print("\n=== AI BUBBLE AGENT PRO ===\n")
+    print("\n=== AI BUBBLE AGENT ===\n")
 
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -162,7 +193,8 @@ def main():
     if last_row is not None:
         prev_bubble = last_row["bubble_score"]
 
-    print("DEBUG prev_regime:", prev_regime)
+    if DEBUG:
+        print("Previous regime:", prev_regime)
 
     event = detect_event(prev_regime, regime, prev_bubble, bubble)
 
@@ -192,6 +224,9 @@ Time: {date}
 
         send_telegram(msg)
         send_webhook(event, regime, bubble, hype, date)
+
+    else:
+        print("No significant event")
 
     print("\n=== DONE ===")
 
