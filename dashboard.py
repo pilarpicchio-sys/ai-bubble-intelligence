@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 from pathlib import Path
-from streamlit_autorefresh import st_autorefresh
-import plotly.graph_objects as go
 from datetime import datetime
+import plotly.graph_objects as go
 
 # ================================
 # CONFIG
@@ -15,48 +13,63 @@ st.set_page_config(layout="wide")
 CSV_FILE = Path("bubble_risk_history.csv")
 STATE_FILE = Path("regime_state.txt")
 
-st_autorefresh(interval=10000, key="refresh")
-
 # ================================
 # LOAD DATA
 # ================================
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=10)
 def load_data():
     if not CSV_FILE.exists():
         return None
 
-    df = pd.read_csv(CSV_FILE, sep=";")
+    try:
+        df = pd.read_csv(CSV_FILE, sep=";")
 
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["bubble_score"] = pd.to_numeric(df["bubble_score"], errors="coerce")
-    df["hype_score"] = pd.to_numeric(df["hype_score"], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["bubble_score"] = pd.to_numeric(df["bubble_score"], errors="coerce")
+        df["hype_score"] = pd.to_numeric(df["hype_score"], errors="coerce")
 
-    df = df.dropna()
-    df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
+        df = df.dropna()
+        df = df.sort_values("date")
 
-    return df
+        return df
+
+    except:
+        return None
 
 # ================================
-# LOAD REGIME STATE
+# SAFE REGIME LOADER (🔥 FIX)
 # ================================
 
 def load_regime_state():
     if not STATE_FILE.exists():
-        return None, None
+        return "N/A", None
 
-    content = STATE_FILE.read_text().split("|")
+    try:
+        raw = STATE_FILE.read_text().strip()
 
-    regime = content[0]
-    time = datetime.fromisoformat(content[1])
+        parts = raw.split("|")
 
-    return regime, time
+        if len(parts) != 2:
+            return "N/A", None
+
+        regime = parts[0].strip()
+
+        try:
+            time = datetime.fromisoformat(parts[1].strip())
+        except:
+            time = None
+
+        return regime, time
+
+    except:
+        return "N/A", None
 
 # ================================
-# STYLE HELPERS
+# STYLE
 # ================================
 
-def regime_color(regime):
+def regime_emoji(regime):
     return {
         "LOW RISK": "🟢",
         "CAUTION": "🟡",
@@ -65,7 +78,7 @@ def regime_color(regime):
     }.get(regime, "⚪")
 
 # ================================
-# MAIN
+# APP
 # ================================
 
 st.title("AI Bubble Intelligence")
@@ -83,19 +96,16 @@ latest = df.iloc[-1]
 # REGIME
 # ================================
 
-current_regime, last_change = load_regime_state()
-
-emoji = regime_color(current_regime)
+regime, last_change = load_regime_state()
+emoji = regime_emoji(regime)
 
 # ================================
-# HERO (🔥 CORE UI)
+# HERO
 # ================================
 
 st.markdown("## 🧠 Regime Status")
 
-st.markdown(f"""
-### {emoji} {current_regime or "N/A"}
-""")
+st.markdown(f"### {emoji} {regime}")
 
 col1, col2 = st.columns(2)
 
@@ -103,27 +113,27 @@ col1.metric("Bubble Score", round(latest["bubble_score"], 2))
 col2.metric("Hype Score", round(latest["hype_score"], 2))
 
 if last_change:
-    st.caption(f"Last regime change: {last_change.strftime('%Y-%m-%d %H:%M')}")
+    st.caption(f"Last change: {last_change.strftime('%Y-%m-%d %H:%M')}")
 
 st.markdown("---")
 
 # ================================
-# INTERPRETATION (🔥 PRODUCT)
+# INTERPRETATION
 # ================================
 
 st.subheader("Interpretation")
 
-if current_regime == "LOW RISK":
-    st.write("Macro and narrative conditions remain stable. No significant bubble dynamics detected.")
+if regime == "LOW RISK":
+    st.write("Market conditions are stable. No bubble dynamics detected.")
 
-elif current_regime == "CAUTION":
-    st.write("Early signs of imbalance are emerging. Narrative and macro conditions are starting to diverge.")
+elif regime == "CAUTION":
+    st.write("Early imbalance signals. Narrative and macro are starting to diverge.")
 
-elif current_regime == "HIGH RISK":
-    st.write("Risk conditions are elevated. Market structure shows increasing fragility and potential instability.")
+elif regime == "HIGH RISK":
+    st.write("Elevated risk environment. Market fragility increasing.")
 
-elif current_regime == "BUBBLE":
-    st.write("Late-stage bubble dynamics detected. Risk of sharp correction is elevated.")
+elif regime == "BUBBLE":
+    st.write("Late-stage bubble dynamics. High probability of correction.")
 
 else:
     st.write("Regime not available.")
@@ -153,26 +163,19 @@ fig.add_trace(go.Scatter(
 fig.update_layout(
     template="plotly_dark",
     height=400,
-    xaxis=dict(type="date"),
     margin=dict(l=20, r=20, t=20, b=20)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# TIMELINE (SIMPLE)
+# DATA
 # ================================
 
-st.subheader("Recent Data Points")
+st.subheader("Recent Data")
 
-recent = df.tail(8)
-
-for _, row in recent.iterrows():
-    st.write(f"{row['date'].strftime('%Y-%m-%d %H:%M:%S')} → Score: {row['bubble_score']}")
-
-# ================================
-# ADVANCED DATA
-# ================================
+for _, row in df.tail(8).iterrows():
+    st.write(f"{row['date']} → Score: {row['bubble_score']}")
 
 with st.expander("Advanced data"):
     st.dataframe(df.tail(20), use_container_width=True)
@@ -181,4 +184,4 @@ with st.expander("Advanced data"):
 # FOOTER
 # ================================
 
-st.caption("This model reflects structural shifts, not intraday market noise.")
+st.caption("System designed to detect regime shifts, not short-term noise.")
