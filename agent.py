@@ -8,11 +8,13 @@ import os
 # LOAD ENV (SAFE)
 # ================================
 
+BASE_DIR = Path(__file__).parent
+
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(dotenv_path=BASE_DIR / ".env")
 except:
-    pass  # dotenv opzionale (per GitHub/cloud)
+    pass
 
 # ================================
 # CONFIG
@@ -21,108 +23,27 @@ except:
 DEBUG = True
 
 # ================================
-# FILES
+# PATHS
 # ================================
 
-CSV_FILE = Path("bubble_risk_history.csv")
-STATE_FILE = Path("regime_state.txt")
-EVENT_LOG = Path("events.log")
+CSV_FILE = BASE_DIR / "bubble_risk_history.csv"
+STATE_FILE = BASE_DIR / "regime_state.txt"
 
 # ================================
-# ENV VARIABLES (SAFE FALLBACK)
+# ENV
 # ================================
 
-ZAPIER_WEBHOOK = os.getenv("ZAPIER_WEBHOOK", "")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+def get_env(key):
+    val = os.getenv(key)
+    return val.strip() if val else ""
+
+ZAPIER_WEBHOOK = get_env("ZAPIER_WEBHOOK")
 
 if DEBUG:
-    print("DEBUG WEBHOOK SET:", bool(ZAPIER_WEBHOOK))
+    print("Webhook configured:", bool(ZAPIER_WEBHOOK))
 
 # ================================
-# TELEGRAM
-# ================================
-
-def send_telegram(msg):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        if DEBUG:
-            print("⚠️ Telegram not configured")
-        return
-
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
-
-        if DEBUG:
-            print("📱 Telegram status:", r.status_code)
-
-    except Exception as e:
-        print("Telegram error:", e)
-
-# ================================
-# WEBHOOK (ZAPIER)
-# ================================
-
-def send_webhook(event, regime, bubble, hype, date):
-    if not ZAPIER_WEBHOOK:
-        if DEBUG:
-            print("⚠️ Webhook not configured")
-        return
-
-    payload = {
-        "event": event,
-        "regime": regime,
-        "bubble": float(bubble),
-        "hype": float(hype),
-        "date": date
-    }
-
-    try:
-        r = requests.post(ZAPIER_WEBHOOK, json=payload, timeout=10)
-
-        if DEBUG:
-            print("🌐 Webhook status:", r.status_code)
-
-        if r.status_code != 200:
-            print("⚠️ Webhook error response:", r.text)
-
-    except Exception as e:
-        print("Webhook error:", e)
-
-# ================================
-# MODEL
-# ================================
-
-def compute_scores():
-    # 🔧 QUI collegherai il tuo vero modello
-    bubble_score = 5.5  # forzato per test Zapier
-    hype_score = 0.439
-
-    if bubble_score < 2:
-        regime = "LOW RISK"
-    elif bubble_score < 3.5:
-        regime = "CAUTION"
-    elif bubble_score < 5:
-        regime = "HIGH RISK"
-    else:
-        regime = "BUBBLE"
-
-    return bubble_score, hype_score, regime
-
-# ================================
-# STATE
-# ================================
-
-def load_last_regime():
-    if not STATE_FILE.exists():
-        return None
-    return STATE_FILE.read_text().strip()
-
-def save_last_regime(regime):
-    STATE_FILE.write_text(regime)
-
-# ================================
-# CSV
+# HISTORY
 # ================================
 
 def append_csv(date, bubble, hype, regime):
@@ -133,16 +54,59 @@ def append_csv(date, bubble, hype, regime):
     with open(CSV_FILE, "a") as f:
         f.write(f"{date};{bubble};{hype};{regime}\n")
 
-def load_last_row():
+def load_history():
     if not CSV_FILE.exists():
         return None
+    return pd.read_csv(CSV_FILE, sep=";")
 
-    df = pd.read_csv(CSV_FILE, sep=";")
+# ================================
+# BUBBLE MODEL (CORE UPGRADE)
+# ================================
 
-    if df.empty:
-        return None
+def compute_bubble_score(df):
 
-    return df.iloc[-1]
+    if df is None or len(df) < 5:
+        return 2.5  # neutro
+
+    recent = df.tail(5)["bubble_score"].astype(float)
+
+    # momentum
+    momentum = recent.iloc[-1] - recent.iloc[0]
+
+    # acceleration
+    accel = recent.iloc[-1] - recent.iloc[-2]
+
+    # weighted score
+    score = 2.5 + momentum * 0.8 + accel * 1.2
+
+    # clamp tra 0 e 6
+    score = max(0, min(6, score))
+
+    return round(score, 2)
+
+# ================================
+# MODEL
+# ================================
+
+def compute_scores():
+
+    df = load_history()
+
+    bubble = compute_bubble_score(df)
+
+    # hype base (lo miglioreremo dopo)
+    hype = 0.4
+
+    if bubble < 2:
+        regime = "LOW RISK"
+    elif bubble < 3.5:
+        regime = "CAUTION"
+    elif bubble < 5:
+        regime = "HIGH RISK"
+    else:
+        regime = "BUBBLE"
+
+    return bubble, hype, regime
 
 # ================================
 # EVENT DETECTION
@@ -168,33 +132,67 @@ def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
     return None
 
 # ================================
-# LOG
+# ALERT FILTER
 # ================================
 
-def log_event(event, date):
-    with open(EVENT_LOG, "a", encoding="utf-8") as f:
-        f.write(f"{date} | {event}\n")
+def should_send_alert(event):
+    if event is None:
+        return False
+
+    if "REGIME CHANGE" in event:
+        return True
+
+    if "SPIKE" in event:
+        return True
+
+    return False
+
+# ================================
+# WEBHOOK
+# ================================
+
+def send_webhook(payload):
+    if not ZAPIER_WEBHOOK:
+        print("Webhook not configured")
+        return
+
+    try:
+        r = requests.post(ZAPIER_WEBHOOK, json=payload, timeout=10)
+        print("Webhook status:", r.status_code)
+    except Exception as e:
+        print("Webhook error:", e)
+
+# ================================
+# STATE
+# ================================
+
+def load_last_regime():
+    if not STATE_FILE.exists():
+        return None
+    return STATE_FILE.read_text().strip()
+
+def save_last_regime(regime):
+    STATE_FILE.write_text(regime)
 
 # ================================
 # MAIN
 # ================================
 
 def main():
+
     print("\n=== AI BUBBLE AGENT ===\n")
 
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     bubble, hype, regime = compute_scores()
 
+    df = load_history()
+
     prev_regime = load_last_regime()
-    last_row = load_last_row()
-
     prev_bubble = None
-    if last_row is not None:
-        prev_bubble = last_row["bubble_score"]
 
-    if DEBUG:
-        print("Previous regime:", prev_regime)
+    if df is not None and not df.empty:
+        prev_bubble = df.iloc[-1]["bubble_score"]
 
     event = detect_event(prev_regime, regime, prev_bubble, bubble)
 
@@ -202,28 +200,24 @@ def main():
     save_last_regime(regime)
 
     print({
-        "date": date,
-        "bubble_score": bubble,
-        "hype_score": hype,
-        "regime": regime
+        "regime": regime,
+        "bubble": bubble,
+        "hype": hype
     })
 
-    if event:
-        print(f"\n🚨 EVENT: {event}")
+    if should_send_alert(event):
 
-        log_event(event, date)
+        print("EVENT:", event)
 
-        msg = f"""AI Bubble Alert
+        payload = {
+            "date": date,
+            "regime": regime,
+            "bubble": bubble,
+            "hype": hype,
+            "event": event
+        }
 
-Event: {event}
-Regime: {regime}
-Bubble Score: {bubble}
-Hype Score: {hype}
-Time: {date}
-"""
-
-        send_telegram(msg)
-        send_webhook(event, regime, bubble, hype, date)
+        send_webhook(payload)
 
     else:
         print("No significant event")
