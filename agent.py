@@ -1,6 +1,7 @@
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+import requests
 
 # ================================
 # FILES
@@ -9,6 +10,20 @@ from pathlib import Path
 CSV_FILE = Path("bubble_risk_history.csv")
 STATE_FILE = Path("regime_state.txt")
 EVENT_LOG = Path("events.log")
+
+# ================================
+# TELEGRAM CONFIG
+# ================================
+
+TOKEN = "8014181321:AAFFwhOYgOGhCiho4X16YPy8Hk5UzsTf9M8"
+CHAT_ID = "7688549575"
+
+def send_telegram(msg):
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    except Exception as e:
+        print("Telegram error:", e)
 
 # ================================
 # MODEL (placeholder)
@@ -30,7 +45,7 @@ def compute_scores():
     return bubble_score, hype_score, regime
 
 # ================================
-# STATE MANAGEMENT (ROBUSTO)
+# STATE MANAGEMENT
 # ================================
 
 def load_last_regime():
@@ -38,18 +53,15 @@ def load_last_regime():
         return None
 
     content = STATE_FILE.read_text().strip()
-
-    # fix robusto: elimina eventuali parti sporche
-    content = content.split("|")[0]
+    content = content.split("|")[0]  # fix robusto
 
     return content
-
 
 def save_last_regime(regime):
     STATE_FILE.write_text(regime)
 
 # ================================
-# CSV WRITE (STANDARD)
+# CSV WRITE
 # ================================
 
 def append_csv(date, bubble, hype, regime):
@@ -62,7 +74,7 @@ def append_csv(date, bubble, hype, regime):
         f.write(f"{date};{bubble};{hype};{regime}\n")
 
 # ================================
-# LOAD LAST ROW (per delta)
+# LOAD LAST ROW
 # ================================
 
 def load_last_row():
@@ -85,11 +97,11 @@ def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
     if prev_regime is None:
         return "INIT"
 
-    # cambio regime
+    # regime change
     if prev_regime != new_regime:
-        return f"REGIME CHANGE: {prev_regime} → {new_regime}"
+        return f"REGIME CHANGE: {prev_regime} -> {new_regime}"
 
-    # spike rischio
+    # spike
     if prev_bubble is not None:
         delta = new_bubble - prev_bubble
 
@@ -127,11 +139,13 @@ def main():
     if last_row is not None:
         prev_bubble = last_row["bubble_score"]
 
-    # debug utile (puoi togliere dopo)
+    # debug
     print("DEBUG prev_regime:", prev_regime)
 
+    # detect event
     event = detect_event(prev_regime, regime, prev_bubble, bubble)
 
+    # write data
     append_csv(date, bubble, hype, regime)
     save_last_regime(regime)
 
@@ -142,9 +156,20 @@ def main():
         "regime": regime
     })
 
+    # trigger alert
     if event:
         print(f"\n🚨 EVENT: {event}")
         log_event(event, date)
+
+        msg = f"""🚨 AI Bubble Alert
+
+Event: {event}
+Regime: {regime}
+Bubble Score: {bubble}
+Hype Score: {hype}
+Time: {date}
+"""
+        send_telegram(msg)
 
     print("\n=== DONE ===")
 
