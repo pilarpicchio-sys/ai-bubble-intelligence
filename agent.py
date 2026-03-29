@@ -1,137 +1,150 @@
-import os
-from pathlib import Path
-from datetime import datetime
 import pandas as pd
-import numpy as np
-from fredapi import Fred
-from dotenv import load_dotenv
-from news_analyzer import analyze_news
+from datetime import datetime
+from pathlib import Path
 
 # ================================
-# CONFIG
+# FILES
 # ================================
-
-load_dotenv()
-
-FRED_API_KEY = os.getenv("FRED_API_KEY")
-fred = Fred(api_key=FRED_API_KEY)
 
 CSV_FILE = Path("bubble_risk_history.csv")
+STATE_FILE = Path("regime_state.txt")
+EVENT_LOG = Path("events.log")
 
 # ================================
-# FRED DATA
+# MODEL (placeholder)
 # ================================
 
-def collect_fred_data():
-    series_ids = {
-        "vix": "VIXCLS",
-        "spread": "BAMLH0A0HYM2",
-        "sentiment": "UMCSENT"
-    }
+def compute_scores():
+    bubble_score = 4.46
+    hype_score = 0.439
 
-    data = {}
-
-    for key, sid in series_ids.items():
-        try:
-            data[key] = fred.get_series(sid)
-        except:
-            data[key] = pd.Series(dtype=float)
-
-    return data
-
-# ================================
-# HELPERS
-# ================================
-
-def zscore(series):
-    s = series.dropna()
-    if len(s) < 10:
-        return 0
-    return (s.iloc[-1] - s.mean()) / (s.std() + 1e-6)
-
-def compute_hype(sentiment, volume):
-    return round(np.tanh(sentiment)*0.6 + np.log1p(volume)*0.4, 3)
-
-# ================================
-# SCORE
-# ================================
-
-def evaluate_score(data, hype):
-
-    score = 0
-
-    score += max(0, zscore(data["vix"])) * 1.5
-    score += max(0, zscore(data["spread"]))
-    score += max(0, -zscore(data["sentiment"]))
-
-    score += np.tanh(hype) * 2
-
-    return round(score, 2)
-
-# ================================
-# REGIME
-# ================================
-
-def classify_regime(score):
-    if score < 2:
-        return "LOW RISK"
-    elif score < 3.5:
-        return "CAUTION"
-    elif score < 5:
-        return "HIGH RISK"
+    if bubble_score < 2:
+        regime = "LOW RISK"
+    elif bubble_score < 3.5:
+        regime = "CAUTION"
+    elif bubble_score < 5:
+        regime = "HIGH RISK"
     else:
-        return "BUBBLE"
+        regime = "BUBBLE"
+
+    return bubble_score, hype_score, regime
 
 # ================================
-# SAVE CSV
+# STATE MANAGEMENT (ROBUSTO)
 # ================================
 
-def save_to_csv(row):
+def load_last_regime():
+    if not STATE_FILE.exists():
+        return None
 
-    if CSV_FILE.exists():
-        df = pd.read_csv(CSV_FILE, sep=";")
-        if row["date"] in df["date"].values:
-            return
+    content = STATE_FILE.read_text().strip()
 
-    import csv
+    # fix robusto: elimina eventuali parti sporche
+    content = content.split("|")[0]
 
-    write_header = not CSV_FILE.exists()
+    return content
 
-    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=row.keys(), delimiter=";")
 
-        if write_header:
-            writer.writeheader()
+def save_last_regime(regime):
+    STATE_FILE.write_text(regime)
 
-        writer.writerow(row)
+# ================================
+# CSV WRITE (STANDARD)
+# ================================
+
+def append_csv(date, bubble, hype, regime):
+
+    if not CSV_FILE.exists():
+        with open(CSV_FILE, "w") as f:
+            f.write("date;bubble_score;hype_score;regime\n")
+
+    with open(CSV_FILE, "a") as f:
+        f.write(f"{date};{bubble};{hype};{regime}\n")
+
+# ================================
+# LOAD LAST ROW (per delta)
+# ================================
+
+def load_last_row():
+    if not CSV_FILE.exists():
+        return None
+
+    df = pd.read_csv(CSV_FILE, sep=";")
+
+    if len(df) == 0:
+        return None
+
+    return df.iloc[-1]
+
+# ================================
+# EVENT DETECTION
+# ================================
+
+def detect_event(prev_regime, new_regime, prev_bubble, new_bubble):
+
+    if prev_regime is None:
+        return "INIT"
+
+    # cambio regime
+    if prev_regime != new_regime:
+        return f"REGIME CHANGE: {prev_regime} → {new_regime}"
+
+    # spike rischio
+    if prev_bubble is not None:
+        delta = new_bubble - prev_bubble
+
+        if delta > 0.5:
+            return "RISK SPIKE ↑"
+
+        if delta < -0.5:
+            return "RISK DROP ↓"
+
+    return None
+
+# ================================
+# EVENT LOG
+# ================================
+
+def log_event(event, date):
+    with open(EVENT_LOG, "a") as f:
+        f.write(f"{date} | {event}\n")
 
 # ================================
 # MAIN
 # ================================
 
 def main():
+    print("\n=== AI BUBBLE AGENT PRO ===\n")
 
-    print("\n=== AI BUBBLE AGENT (CSV REGIME) ===\n")
+    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    data = collect_fred_data()
+    bubble, hype, regime = compute_scores()
 
-    headlines, sentiment, volume = analyze_news()
+    prev_regime = load_last_regime()
+    last_row = load_last_row()
 
-    hype = compute_hype(sentiment, volume)
-    score = evaluate_score(data, hype)
+    prev_bubble = None
+    if last_row is not None:
+        prev_bubble = last_row["bubble_score"]
 
-    regime = classify_regime(score)
+    # debug utile (puoi togliere dopo)
+    print("DEBUG prev_regime:", prev_regime)
 
-    row = {
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "bubble_score": score,
+    event = detect_event(prev_regime, regime, prev_bubble, bubble)
+
+    append_csv(date, bubble, hype, regime)
+    save_last_regime(regime)
+
+    print({
+        "date": date,
+        "bubble_score": bubble,
         "hype_score": hype,
         "regime": regime
-    }
+    })
 
-    print(row)
-
-    save_to_csv(row)
+    if event:
+        print(f"\n🚨 EVENT: {event}")
+        log_event(event, date)
 
     print("\n=== DONE ===")
 
