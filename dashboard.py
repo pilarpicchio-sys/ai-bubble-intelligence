@@ -63,10 +63,14 @@ if df is None or len(df) == 0:
 latest = df.iloc[-1]
 
 # ================================
-# REGIME (FROM CSV 🔥)
+# REGIME SAFE (🔥 FIX)
 # ================================
 
-regime = latest.get("regime", "N/A")
+if "regime" in df.columns:
+    regime = latest.get("regime", "N/A")
+else:
+    regime = "N/A"
+
 emoji, color = regime_style(regime)
 
 # ================================
@@ -103,7 +107,7 @@ elif regime == "BUBBLE":
     st.write("Late-stage bubble dynamics. High probability of correction.")
 
 else:
-    st.write("Regime not available.")
+    st.write("Regime not available yet (older data).")
 
 # ================================
 # CHART
@@ -136,16 +140,21 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ================================
-# REGIME TIMELINE (🔥 NUOVO)
+# REGIME TIMELINE (🔥 FIXATA)
 # ================================
 
 st.subheader("Regime Timeline")
 
-timeline = df[["date", "regime"]].tail(10)
+if "regime" in df.columns:
 
-for _, row in timeline.iterrows():
-    e, _ = regime_style(row["regime"])
-    st.write(f"{row['date']} → {e} {row['regime']}")
+    timeline = df[["date", "regime"]].tail(10)
+
+    for _, row in timeline.iterrows():
+        e, _ = regime_style(row["regime"])
+        st.write(f"{row['date']} → {e} {row['regime']}")
+
+else:
+    st.info("Regime tracking started recently. No historical regime data yet.")
 
 # ================================
 # DATA
