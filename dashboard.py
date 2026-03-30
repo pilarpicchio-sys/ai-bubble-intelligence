@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).parent
 CSV_FILE = BASE_DIR / "bubble_risk_history.csv"
 
 # ================================
-# LOAD DATA (ROBUSTO + FILTRO MODELLO NUOVO)
+# LOAD DATA (USA SOLO MODELLO NUOVO)
 # ================================
 
 @st.cache_data(ttl=10)
@@ -24,7 +24,7 @@ def load_data():
     try:
         df = pd.read_csv(CSV_FILE, sep=";")
 
-        # 🔥 USA SOLO RIGHE DEL MODELLO NUOVO (score presente)
+        # 🔥 tieni solo righe con score (modello nuovo)
         df = df[df["score"].notna()]
 
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
@@ -156,11 +156,14 @@ for _, row in recent.iterrows():
     st.write(f"{row['date']} → {e} {r} ({round(row['score'],1)})")
 
 # ================================
-# RAW DATA
+# CLEAN DATA TABLE (🔥 FIX QUI)
 # ================================
 
-with st.expander("Advanced data"):
-    st.dataframe(df.tail(20), use_container_width=True)
+st.subheader("Recent Data")
+
+clean_df = df[["date", "score", "regime"]]
+
+st.dataframe(clean_df.tail(20), use_container_width=True)
 
 # ================================
 # FOOTER
