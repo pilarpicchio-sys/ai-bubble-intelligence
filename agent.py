@@ -3,6 +3,8 @@ from datetime import datetime
 from pathlib import Path
 import requests
 import os
+import yfinance as yf
+import matplotlib.pyplot as plt
 
 # ================================
 # LOAD ENV
@@ -21,7 +23,7 @@ except:
 # ================================
 
 CSV_FILE = BASE_DIR / "bubble_risk_history.csv"
-STATE_FILE = BASE_DIR / "regime_state.txt"
+CHART_FILE = BASE_DIR / "bubble_chart.png"
 
 # ================================
 # ENV
@@ -39,59 +41,68 @@ FRED_API_KEY = get_env("FRED_API_KEY")
 # FRED DATA
 # ================================
 
-def get_fred_series(series_id):
-    url = f"https://api.stlouisfed.org/fred/series/observations"
+def get_fred(series):
+    url = "https://api.stlouisfed.org/fred/series/observations"
     params = {
-        "series_id": series_id,
+        "series_id": series,
         "api_key": FRED_API_KEY,
         "file_type": "json",
         "sort_order": "desc",
         "limit": 1
     }
     r = requests.get(url, params=params)
-    data = r.json()
-    return float(data["observations"][0]["value"])
+    return float(r.json()["observations"][0]["value"])
 
 # ================================
-# MACRO INDICATORS
+# MARKET DATA
 # ================================
 
-def get_macro_data():
+def get_sp500():
+    data = yf.download("^GSPC", period="5d", interval="1d", progress=False)
+    return float(data["Close"].iloc[-1])
+
+# ================================
+# MACRO
+# ================================
+
+def get_macro():
+
     try:
-        m2 = get_fred_series("M2SL")              # liquidità
-        vix = get_fred_series("VIXCLS")           # volatilità
-        rate = get_fred_series("FEDFUNDS")        # tassi
-
         return {
-            "m2": m2,
-            "vix": vix,
-            "rate": rate
+            "m2": get_fred("M2SL"),
+            "vix": get_fred("VIXCLS"),
+            "rate": get_fred("FEDFUNDS"),
+            "sp500": get_sp500()
         }
     except Exception as e:
-        print("FRED error:", e)
+        print("Data error:", e)
         return None
 
 # ================================
-# SCORE MACRO
+# SCORING
 # ================================
 
-def compute_macro_score(data):
+def compute_score(m):
 
-    if data is None:
+    if m is None:
         return 2.5
 
     score = 0
 
-    # liquidità alta → rischio bolla
-    if data["m2"] > 20000:
+    # liquidity
+    if m["m2"] > 20000:
         score += 2
 
-    # volatilità bassa → euforia
-    if data["vix"] < 15:
+    # low volatility = complacency
+    if m["vix"] < 15:
         score += 2
 
-    # tassi bassi → fuel
-    if data["rate"] < 2:
+    # low rates = fuel
+    if m["rate"] < 2:
+        score += 1
+
+    # high equity level (proxy)
+    if m["sp500"] > 4500:
         score += 1
 
     return min(score, 6)
@@ -100,16 +111,14 @@ def compute_macro_score(data):
 # REGIME
 # ================================
 
-def classify_regime(score):
-
+def regime(score):
     if score < 2:
         return "LOW RISK"
     elif score < 3.5:
         return "CAUTION"
     elif score < 5:
         return "HIGH RISK"
-    else:
-        return "BUBBLE"
+    return "BUBBLE"
 
 # ================================
 # HISTORY
@@ -129,10 +138,10 @@ def load_history():
     return pd.read_csv(CSV_FILE, sep=";")
 
 # ================================
-# TREND + PERSISTENCE
+# TREND / PERSISTENCE
 # ================================
 
-def compute_trend(df):
+def trend(df):
     if df is None or len(df) < 3:
         return "insufficient"
 
@@ -144,13 +153,13 @@ def compute_trend(df):
         return "downtrend"
     return "sideways"
 
-def compute_persistence(df):
+def persistence(df):
     if df is None:
         return 0
 
     count = 0
-    for val in reversed(df["score"].astype(float).values):
-        if val >= 3.5:
+    for v in reversed(df["score"].astype(float)):
+        if v >= 3.5:
             count += 1
         else:
             break
@@ -158,10 +167,10 @@ def compute_persistence(df):
     return count
 
 # ================================
-# ALERT LOGIC
+# ALERT
 # ================================
 
-def should_send_alert(regime, trend, persistence, score):
+def should_alert(regime, trend, persistence, score):
 
     if regime == "BUBBLE":
         return True
@@ -175,10 +184,25 @@ def should_send_alert(regime, trend, persistence, score):
     return False
 
 # ================================
-# AI ANALYSIS
+# CHART
 # ================================
 
-def generate_ai_text(regime, score, macro, trend, persistence):
+def generate_chart(df):
+
+    if df is None or len(df) < 2:
+        return
+
+    plt.figure()
+    plt.plot(df["score"].astype(float))
+    plt.title("Bubble Risk Score")
+    plt.savefig(CHART_FILE)
+    plt.close()
+
+# ================================
+# AI REPORT
+# ================================
+
+def generate_ai(regime, score, m, trend, persistence):
 
     if not OPENAI_API_KEY:
         return "AI unavailable"
@@ -187,16 +211,16 @@ def generate_ai_text(regime, score, macro, trend, persistence):
     client = OpenAI()
 
     prompt = f"""
-You are a macro analyst.
+You are a macro strategist.
 
-Data:
 Regime: {regime}
 Score: {score}
 Trend: {trend}
 Persistence: {persistence}
-M2: {macro['m2']}
-VIX: {macro['vix']}
-Rates: {macro['rate']}
+M2: {m['m2']}
+VIX: {m['vix']}
+Rates: {m['rate']}
+SP500: {m['sp500']}
 
 Write a professional report:
 
@@ -210,18 +234,19 @@ Risk Outlook:
 ...
 """
 
-    res = client.chat.completions.create(
+    r = client.chat.completions.create(
         model="gpt-4.1-mini",
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return res.choices[0].message.content.strip()
+    return r.choices[0].message.content.strip()
 
 # ================================
 # WEBHOOK
 # ================================
 
-def send_webhook(payload):
+def send(payload):
+
     if not ZAPIER_WEBHOOK:
         print("No webhook")
         return
@@ -235,42 +260,45 @@ def send_webhook(payload):
 
 def main():
 
-    print("\n=== AI MACRO BUBBLE AGENT ===\n")
+    print("\n=== AI BUBBLE INTELLIGENCE SYSTEM ===\n")
 
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    macro = get_macro_data()
-    score = compute_macro_score(macro)
-    regime = classify_regime(score)
+    m = get_macro()
+    score = compute_score(m)
+    reg = regime(score)
 
     df = load_history()
 
-    trend = compute_trend(df)
-    persistence = compute_persistence(df)
+    tr = trend(df)
+    pers = persistence(df)
 
-    append_csv(date, score, regime)
+    append_csv(date, score, reg)
+    df = load_history()
+
+    generate_chart(df)
 
     print({
-        "regime": regime,
+        "regime": reg,
         "score": score,
-        "trend": trend,
-        "persistence": persistence
+        "trend": tr,
+        "persistence": pers
     })
 
-    if should_send_alert(regime, trend, persistence, score):
+    if should_alert(reg, tr, pers, score):
 
-        analysis = generate_ai_text(regime, score, macro, trend, persistence)
+        report = generate_ai(reg, score, m, tr, pers)
 
         payload = {
             "date": date,
-            "regime": regime,
+            "regime": reg,
             "score": score,
-            "trend": trend,
-            "persistence": persistence,
-            "analysis": analysis
+            "trend": tr,
+            "persistence": pers,
+            "analysis": report
         }
 
-        send_webhook(payload)
+        send(payload)
 
     else:
         print("No alert")
